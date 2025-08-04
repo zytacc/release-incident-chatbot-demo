@@ -1,6 +1,7 @@
 # 🛠️ Release Incident Chatbot
 
 A lightweight AI-powered assistant that helps engineering teams search and summarize historical production incident records using natural language.
+
 Built by Elton Zhang as a personal learning project to explore applied AI in incident management and DevOps tooling.
 
 🔗 **Live Demo**: [https://release-incident-chatbot-demo-8ydtmw2zvcffgfcmyqdfcw.streamlit.app/](https://release-incident-chatbot-demo-8ydtmw2zvcffgfcmyqdfcw.streamlit.app/)

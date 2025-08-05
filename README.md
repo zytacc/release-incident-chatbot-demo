@@ -4,6 +4,8 @@ A lightweight AI-powered assistant that helps engineering teams search and summa
 
 Built by Elton Zhang as a personal learning project to explore applied AI in incident management and DevOps tooling.
 
+Incident records were ai-generated, but reflects typical issues encountered in supporting enterprise production systems.
+
 🔗 **Live Demo**: [https://release-incident-chatbot-demo-8ydtmw2zvcffgfcmyqdfcw.streamlit.app/](https://release-incident-chatbot-demo-8ydtmw2zvcffgfcmyqdfcw.streamlit.app/)
 
 ---

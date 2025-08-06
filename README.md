@@ -6,7 +6,7 @@ Built by Elton Zhang as a personal learning project to explore applied AI in inc
 
 Incident records were ai-generated, but reflects typical issues encountered in supporting enterprise production systems.
 
-🔗 **Live Demo**: [https://release-incident-chatbot-demo-8ydtmw2zvcffgfcmyqdfcw.streamlit.app/](https://release-incident-chatbot-demo-8ydtmw2zvcffgfcmyqdfcw.streamlit.app/)
+🔗 **Live Demo**: https://release-incident-chatbot-demo-x8bkebdqlxmwtzv9ot6npe.streamlit.app/
 
 ---
 

@@ -74,26 +74,25 @@ def respond_with_date_match(date_str):
     else:
         st.write(f"No incidents recorded on {date_str.strftime('%Y-%m-%d')}.")
 
+def filter_by_date_range(start, end, label, team=None):
+    df = incident_df[(incident_df["date"] >= start) & (incident_df["date"] <= end)]
+    if team:
+        df = df[df["team"].str.lower() == team.lower()]
+        label = f"{team} team in {label}"
+    st.subheader(f"📅 Incidents during {label}")
+    if df.empty:
+        st.write(f"No incidents recorded for {label}.")
+    else:
+        for row in df["entry"]:
+            st.text(row)
+
 def respond_with_month_count(month_name):
     count = incident_df[incident_df["month"] == month_name].shape[0]
     st.write(f"There were **{count}** incidents reported in **{month_name}**.")
 
-def filter_by_date_range(start, end, label):
-    filtered = incident_df[(incident_df["date"] >= start) & (incident_df["date"] <= end)]
-    st.subheader(f"📅 Incidents during {label}")
-    if filtered.empty:
-        st.write(f"No incidents recorded during {label}.")
-    else:
-        for row in filtered["entry"]:
-            st.text(row)
-
 if query:
     st.session_state.query_count += 1
     query_lower = query.lower()
-
-    date_match = re.search(r"(\d{4}-\d{2}-\d{2})", query)
-    month_match = re.search(r"(\b" + "\b|\b".join(calendar.month_name[1:]) + "\b)", query, re.IGNORECASE)
-    how_many = "how many" in query_lower
 
     today = datetime.today()
     this_month_start = today.replace(day=1)
@@ -101,11 +100,17 @@ if query:
     last_month_start = last_month_end.replace(day=1)
     current_year = today.year
     last_year = current_year - 1
-
     current_quarter = (today.month - 1) // 3 + 1
     this_q_start = datetime(today.year, 3 * current_quarter - 2, 1)
     last_q_end = this_q_start - timedelta(days=1)
     last_q_start = datetime(last_q_end.year, 3 * ((last_q_end.month - 1)//3) + 1, 1)
+
+    date_match = re.search(r"(\d{4}-\d{2}-\d{2})", query)
+    month_match = re.search(r"(\b" + "\b|\b".join(calendar.month_name[1:]) + "\b)", query, re.IGNORECASE)
+    how_many = "how many" in query_lower
+
+    past_days_match = re.search(r"past (\d+) days", query_lower)
+    team_match = re.search(r"(qa|release|scm|network|middleware|build|deployment|platform)", query_lower)
 
     if date_match:
         try:
@@ -115,6 +120,10 @@ if query:
             st.warning("Invalid date format detected.")
     elif how_many and month_match:
         respond_with_month_count(month_match.group(1).capitalize())
+    elif past_days_match:
+        days = int(past_days_match.group(1))
+        start = today - timedelta(days=days)
+        filter_by_date_range(start, today, f"past {days} days")
     elif "this year" in query_lower:
         filter_by_date_range(datetime(current_year, 1, 1), datetime(current_year, 12, 31), f"{current_year}")
     elif "last year" in query_lower:
@@ -127,6 +136,26 @@ if query:
         filter_by_date_range(this_q_start, today, "this quarter")
     elif "last quarter" in query_lower:
         filter_by_date_range(last_q_start, last_q_end, "last quarter")
+    elif team_match:
+        team = team_match.group(1)
+        if "this month" in query_lower:
+            filter_by_date_range(this_month_start, today, "this month", team)
+        elif "last month" in query_lower:
+            filter_by_date_range(last_month_start, last_month_end, "last month", team)
+        elif "this quarter" in query_lower:
+            filter_by_date_range(this_q_start, today, "this quarter", team)
+        elif "last quarter" in query_lower:
+            filter_by_date_range(last_q_start, last_q_end, "last quarter", team)
+        elif "this year" in query_lower:
+            filter_by_date_range(datetime(current_year, 1, 1), datetime(current_year, 12, 31), f"{current_year}", team)
+        elif "last year" in query_lower:
+            filter_by_date_range(datetime(last_year, 1, 1), datetime(last_year, 12, 31), f"{last_year}", team)
+        elif past_days_match:
+            days = int(past_days_match.group(1))
+            start = today - timedelta(days=days)
+            filter_by_date_range(start, today, f"past {days} days", team)
+        else:
+            st.warning("Team filter detected, but no time range found.")
     else:
         query_embedding = model.encode([query])
         top_k = 5

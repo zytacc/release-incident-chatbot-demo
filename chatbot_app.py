@@ -108,7 +108,6 @@ if query:
     date_match = re.search(r"(\d{4}-\d{2}-\d{2})", query)
     month_match = re.search(r"(\b" + "\b|\b".join(calendar.month_name[1:]) + "\b)", query, re.IGNORECASE)
     how_many = "how many" in query_lower
-
     past_days_match = re.search(r"past (\d+) days", query_lower)
     team_match = re.search(r"(qa|release|scm|network|middleware|build|deployment|platform)", query_lower)
 
@@ -120,6 +119,16 @@ if query:
             st.warning("Invalid date format detected.")
     elif how_many and month_match:
         respond_with_month_count(month_match.group(1).capitalize())
+    elif team_match and month_match:
+        month = month_match.group(1).capitalize()
+        team = team_match.group(1)
+        df = incident_df[(incident_df["month"] == month) & (incident_df["team"].str.lower() == team.lower())]
+        st.subheader(f"📅 Incidents for {team} team in {month}")
+        if df.empty:
+            st.write(f"No incidents found for {team} team in {month}.")
+        else:
+            for row in df["entry"]:
+                st.text(row)
     elif past_days_match:
         days = int(past_days_match.group(1))
         start = today - timedelta(days=days)

@@ -1,198 +1,153 @@
-
-import streamlit as st
-from openai import OpenAI
 import json
 import faiss
-import numpy as np
+import streamlit as st
 from sentence_transformers import SentenceTransformer
-from datetime import datetime, timedelta
-import pandas as pd
+from openai import OpenAI
 import re
-import calendar
+from datetime import datetime, timedelta
 
+# === OpenAI Setup ===
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+model_id = "gpt-3.5-turbo"
+
+# === Load Embeddings + Incidents ===
+with open("incident_texts.json") as f:
+    documents = json.load(f)
+
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+index = faiss.read_index("incident_index.faiss")
+
+# === Streamlit UI ===
 st.set_page_config(page_title="Release Incident Advisor Chatbot", layout="wide")
 st.title("Release Incident Advisor Chatbot")
 st.caption("Ask things like: 'What incidents occurred last quarter?', 'What happened on 2025-03-24', 'What did the release team work on in June?' ")
 st.caption("This is a prototype for internal incident search using FAISS and OpenAI's API.")
 st.caption("Practice project by: Elton Zhang.")
 
-with open("incident_texts.json", "r", encoding="utf-8") as f:
-    documents = json.load(f)
-
-index = faiss.read_index("incident_index.faiss")
-model = SentenceTransformer("all-MiniLM-L6-v2")
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-
-if "query_count" not in st.session_state:
-    st.session_state.query_count = 0
-if "token_count" not in st.session_state:
-    st.session_state.token_count = 0
-
-st.sidebar.title("Usage Stats")
-st.sidebar.metric("Queries this session", st.session_state.query_count)
-st.sidebar.metric("Total tokens used", st.session_state.token_count)
-estimated_cost = st.session_state.token_count * 0.000002
-st.sidebar.metric("Estimated cost", f"${estimated_cost:.4f}")
-
-def extract_metadata(entry):
-    try:
-        date_str, rest = entry.split(" - ", 1)
-        date = datetime.strptime(date_str.strip(), "%Y-%m-%d")
-        team = rest.split(":")[0].strip()
-        root_match = re.search(r"Root Cause: (.*?)\s*\|", entry)
-        root_cause = root_match.group(1).strip() if root_match else "Unknown"
-        return {"date": date, "month": date.strftime("%B"), "year": date.year, "team": team, "root_cause": root_cause, "entry": entry}
-    except:
-        return {"date": None, "month": "Unknown", "year": "Unknown", "team": "Unknown", "root_cause": "Unknown", "entry": entry}
-
-incident_df = pd.DataFrame([extract_metadata(doc) for doc in documents if doc])
-
-with st.expander("📊 Incident Dashboard", expanded=False):
-    st.subheader("Incidents by Month")
-    month_df = incident_df["month"].value_counts().sort_index()
-    st.bar_chart(month_df)
-    st.subheader("Incidents by Team")
-    team_df = incident_df["team"].value_counts().sort_values(ascending=False)
-    st.dataframe(team_df.rename("Count").reset_index().rename(columns={"index": "Team"}))
-    st.subheader("Top Root Causes")
-    root_df = incident_df["root_cause"].value_counts().head(10)
-    st.dataframe(root_df.rename("Count").reset_index().rename(columns={"index": "Root Cause"}))
-
-with st.expander("📁 Incident Explorer", expanded=False):
-    team_filter = st.selectbox("Filter by Team", options=["All"] + sorted(incident_df["team"].unique()))
-    filtered_df = incident_df if team_filter == "All" else incident_df[incident_df["team"] == team_filter]
-    st.dataframe(filtered_df[["date", "team", "root_cause"]].sort_values("date", ascending=False))
-
 query = st.text_input("Your Question", placeholder="e.g., Any QA issues this month?")
 
-def respond_with_date_match(date_str):
-    matched = incident_df[incident_df["date"] == date_str]
-    if not matched.empty:
-        st.subheader("📅 Incident on " + date_str.strftime("%Y-%m-%d"))
-        for row in matched["entry"]:
-            st.text(row)
-    else:
-        st.write(f"No incidents recorded on {date_str.strftime('%Y-%m-%d')}.")
-
-def filter_by_date_range(start, end, label, team=None):
-    df = incident_df[(incident_df["date"] >= start) & (incident_df["date"] <= end)]
-    if team:
-        df = df[df["team"].str.lower() == team.lower()]
-        label = f"{team} team in {label}"
-    st.subheader(f"📅 Incidents during {label}")
-    if df.empty:
-        st.write(f"No incidents recorded for {label}.")
-    else:
-        for row in df["entry"]:
-            st.text(row)
-
-def respond_with_month_count(month_name):
-    count = incident_df[incident_df["month"] == month_name].shape[0]
-    st.write(f"There were **{count}** incidents reported in **{month_name}**.")
-
-if query:
-    st.session_state.query_count += 1
-    query_lower = query.lower()
-
+# === Helper: Convert Relative Time Phrase to Date Range ===
+def resolve_relative_date(query):
     today = datetime.today()
-    this_month_start = today.replace(day=1)
-    last_month_end = this_month_start - timedelta(days=1)
-    last_month_start = last_month_end.replace(day=1)
-    current_year = today.year
-    last_year = current_year - 1
-    current_quarter = (today.month - 1) // 3 + 1
-    this_q_start = datetime(today.year, 3 * current_quarter - 2, 1)
-    last_q_end = this_q_start - timedelta(days=1)
-    last_q_start = datetime(last_q_end.year, 3 * ((last_q_end.month - 1)//3) + 1, 1)
+    year = today.year
+    month = today.month
+    quarter = (month - 1) // 3 + 1
 
-    date_match = re.search(r"(\d{4}-\d{2}-\d{2})", query)
-    month_match = re.search(r"(\b" + "\b|\b".join(calendar.month_name[1:]) + "\b)", query, re.IGNORECASE)
-    how_many = "how many" in query_lower
-    past_days_match = re.search(r"past (\d+) days", query_lower)
-    team_match = re.search(r"(qa|release|scm|network|middleware|build|deployment|platform)", query_lower)
+    query_lower = query.lower()
+    if "this year" in query_lower:
+        return f"{year}-01-01", today.strftime("%Y-%m-%d")
+    if "last year" in query_lower:
+        return f"{year-1}-01-01", f"{year-1}-12-31"
+    if "this quarter" in query_lower:
+        start_month = 3 * (quarter - 1) + 1
+        start_date = datetime(year, start_month, 1)
+        return start_date.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+    if "last quarter" in query_lower:
+        if quarter == 1:
+            return f"{year-1}-10-01", f"{year-1}-12-31"
+        start_month = 3 * (quarter - 2) + 1
+        start_date = datetime(year, start_month, 1)
+        end_date = datetime(year, start_month + 2, 28)
+        return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    if "this month" in query_lower:
+        return f"{year}-{month:02d}-01", today.strftime("%Y-%m-%d")
+    if "last month" in query_lower:
+        last_month = month - 1 if month > 1 else 12
+        last_year = year if month > 1 else year - 1
+        return f"{last_year}-{last_month:02d}-01", f"{last_year}-{last_month:02d}-31"
+    return None, None
 
-    if date_match:
-        try:
-            date_obj = datetime.strptime(date_match.group(1), "%Y-%m-%d")
-            respond_with_date_match(date_obj)
-        except ValueError:
-            st.warning("Invalid date format detected.")
-    elif how_many and month_match:
-        respond_with_month_count(month_match.group(1).capitalize())
-    elif team_match and month_match:
-        month = month_match.group(1).capitalize()
-        team = team_match.group(1)
-        df = incident_df[(incident_df["month"] == month) & (incident_df["team"].str.lower() == team.lower())]
-        st.subheader(f"📅 Incidents for {team} team in {month}")
-        if df.empty:
-            st.write(f"No incidents found for {team} team in {month}.")
-        else:
-            for row in df["entry"]:
-                st.text(row)
-    elif past_days_match:
-        days = int(past_days_match.group(1))
-        start = today - timedelta(days=days)
-        filter_by_date_range(start, today, f"past {days} days")
-    elif "this year" in query_lower:
-        filter_by_date_range(datetime(current_year, 1, 1), datetime(current_year, 12, 31), f"{current_year}")
-    elif "last year" in query_lower:
-        filter_by_date_range(datetime(last_year, 1, 1), datetime(last_year, 12, 31), f"{last_year}")
-    elif "this month" in query_lower:
-        filter_by_date_range(this_month_start, today, "this month")
-    elif "last month" in query_lower:
-        filter_by_date_range(last_month_start, last_month_end, "last month")
-    elif "this quarter" in query_lower:
-        filter_by_date_range(this_q_start, today, "this quarter")
-    elif "last quarter" in query_lower:
-        filter_by_date_range(last_q_start, last_q_end, "last quarter")
-    elif team_match:
-        team = team_match.group(1)
-        if "this month" in query_lower:
-            filter_by_date_range(this_month_start, today, "this month", team)
-        elif "last month" in query_lower:
-            filter_by_date_range(last_month_start, last_month_end, "last month", team)
-        elif "this quarter" in query_lower:
-            filter_by_date_range(this_q_start, today, "this quarter", team)
-        elif "last quarter" in query_lower:
-            filter_by_date_range(last_q_start, last_q_end, "last quarter", team)
-        elif "this year" in query_lower:
-            filter_by_date_range(datetime(current_year, 1, 1), datetime(current_year, 12, 31), f"{current_year}", team)
-        elif "last year" in query_lower:
-            filter_by_date_range(datetime(last_year, 1, 1), datetime(last_year, 12, 31), f"{last_year}", team)
-        elif past_days_match:
-            days = int(past_days_match.group(1))
-            start = today - timedelta(days=days)
-            filter_by_date_range(start, today, f"past {days} days", team)
-        else:
-            st.warning("Team filter detected, but no time range found.")
+# === Begin Filtering ===
+filtered_docs = documents
+
+# 1. Issue Owner Filtering
+owner_aliases = {
+    "release": "Release Engineering",
+    "release engineering": "Release Engineering",
+    "qa": "QA",
+    "ssm": "SSM",
+    "dba": "DBA",
+    "scm": "SCM",
+    "network": "Network",
+    "middleware": "Middleware",
+    "prod ops": "Prod Ops",
+    "data services": "Data Services"
+}
+owner_match = None
+for key in owner_aliases:
+    if key in query.lower():
+        owner_match = owner_aliases[key]
+        break
+if owner_match:
+    st.info(f"🎯 Filtering for incidents owned by **{owner_match}**")
+    filtered_docs = [doc for doc in filtered_docs if owner_match in doc]
+
+# 2. Exact Date Filter (YYYY-MM-DD)
+exact_date_match = re.search(r'\b(2025-\d{2}-\d{2})\b', query)
+if exact_date_match:
+    date_str = exact_date_match.group(1)
+    st.info(f"📅 Filtering for incidents on **{date_str}**")
+    filtered_docs = [doc for doc in filtered_docs if date_str in doc]
+
+# 3. Month Name Filter
+month_match = re.search(
+    r'in\s+(january|february|march|april|may|june|july|august|september|october|november|december)',
+    query.lower()
+)
+if month_match:
+    month_str = month_match.group(1)
+    month_number = datetime.strptime(month_str, "%B").month
+    st.info(f"📆 Filtering incidents for **{month_str.title()}**")
+    filtered_docs = [doc for doc in filtered_docs if f"-{month_number:02d}-" in doc]
+
+# 4. Relative Date Filter
+start_date, end_date = resolve_relative_date(query)
+if start_date and end_date:
+    st.info(f"⏱️ Filtering incidents from **{start_date}** to **{end_date}**")
+    filtered_docs = [
+        doc for doc in filtered_docs
+        if start_date <= doc[:10] <= end_date  # assumes date is at start of string
+    ]
+
+# === Retrieval & LLM ===
+if query:
+    if len(filtered_docs) == 0:
+        st.warning("No incidents found matching that filter.")
     else:
-        query_embedding = model.encode([query])
-        top_k = 5
-        _, I = index.search(np.array(query_embedding), top_k)
-        matched_docs = [documents[i] for i in I[0]]
-        context = "\n".join(matched_docs)
+        filtered_embeddings = embedder.encode(filtered_docs)
+        temp_index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
+        temp_index.add(filtered_embeddings)
 
-        messages = [
-            {"role": "system", "content": "You are an assistant that answers based on historical incident records."},
-            {"role": "user", "content": f"Relevant incidents:\n{context}\n\nQuestion: {query}"}
-        ]
+        q_embedding = embedder.encode([query])
+        _, I = temp_index.search(q_embedding, k=min(5, len(filtered_docs)))
+        top_docs = [filtered_docs[i] for i in I[0]]
+
+        with st.expander("🔍 Retrieved Incident Records"):
+            for i, doc in enumerate(top_docs):
+                st.markdown(f"**Incident {i+1}:** {doc}")
+
+        # Build prompt
+        context = "\n\n".join(top_docs)
+        prompt = f"""
+You are an assistant analyzing internal production incident reports.
+
+User Question:
+{query}
+
+Relevant Incident Records:
+{context}
+
+Based on these incidents, answer the user's question. If no direct answer exists, summarize what can be inferred.
+"""
 
         try:
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages
+                model=model_id,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+                max_tokens=500,
             )
-            answer = response.choices[0].message.content
-            usage = response.usage
-            st.session_state.token_count += usage.total_tokens
-
-            st.subheader("🔍 Retrieved Incident Records")
-            for doc in matched_docs:
-                st.text(doc)
-
-            st.subheader("🤖 Answer")
-            st.write(answer)
-            st.caption(f"Tokens used: {usage.total_tokens} (Prompt: {usage.prompt_tokens}, Completion: {usage.completion_tokens})")
-
+            st.markdown("### 🤖 Answer")
+            st.write(response.choices[0].message.content)
         except Exception as e:
             st.error(f"⚠️ OpenAI API Error: {e}")

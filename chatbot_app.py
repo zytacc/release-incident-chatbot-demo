@@ -7,8 +7,14 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 import pandas as pd
-from collections import Counter
 import re
+
+# --- Streamlit Page Config ---
+st.set_page_config(page_title="Release Incident Advisor Chatbot", layout="wide")
+st.title("Release Incident Advisor Chatbot")
+st.caption("Ask things like: 'What incidents occurred last quarter?', 'What happened on 2025-03-24', 'What did the release team work on in June?' ")
+st.caption("This is a prototype for internal incident search using FAISS and OpenAI's API.")
+st.caption("Practice project by: Elton Zhang.")
 
 # --- Load documents and FAISS index ---
 with open("incident_texts.json", "r", encoding="utf-8") as f:
@@ -20,22 +26,20 @@ model = SentenceTransformer("all-MiniLM-L6-v2")
 # --- Setup OpenAI client ---
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# --- Initialize session state ---
+# --- Session state for usage tracking ---
 if "query_count" not in st.session_state:
     st.session_state.query_count = 0
 if "token_count" not in st.session_state:
     st.session_state.token_count = 0
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
 
-# --- Sidebar Usage Metrics ---
+# --- Sidebar usage metrics ---
 st.sidebar.title("Usage Stats")
 st.sidebar.metric("Queries this session", st.session_state.query_count)
 st.sidebar.metric("Total tokens used", st.session_state.token_count)
 estimated_cost = st.session_state.token_count * 0.000002
 st.sidebar.metric("Estimated cost", f"${estimated_cost:.4f}")
 
-# --- Parse incident metadata for dashboard and table ---
+# --- Incident metadata extraction ---
 def extract_metadata(entry):
     try:
         date_str, rest = entry.split(" - ", 1)
@@ -49,7 +53,7 @@ def extract_metadata(entry):
 
 incident_df = pd.DataFrame([extract_metadata(doc) for doc in documents if doc])
 
-# --- Dashboard ---
+# --- Dashboard section ---
 with st.expander("📊 Incident Dashboard", expanded=False):
     st.subheader("Incidents by Month")
     month_df = incident_df["month"].value_counts().sort_index()
@@ -63,7 +67,7 @@ with st.expander("📊 Incident Dashboard", expanded=False):
     root_df = incident_df["root_cause"].value_counts().head(10)
     st.dataframe(root_df.rename("Count").reset_index().rename(columns={"index": "Root Cause"}))
 
-# --- Data Table with Filters ---
+# --- Explorer section ---
 with st.expander("📁 Incident Explorer", expanded=False):
     team_filter = st.selectbox("Filter by Team", options=["All"] + sorted(incident_df["team"].unique()))
     if team_filter != "All":
@@ -72,9 +76,8 @@ with st.expander("📁 Incident Explorer", expanded=False):
         filtered_df = incident_df
     st.dataframe(filtered_df[["date", "team", "root_cause"]].sort_values("date", ascending=False))
 
-# --- Chat Interface ---
-st.title("🧠 Incident Advisor (with OpenAI)")
-query = st.text_input("Ask a question:", "")
+# --- Query input ---
+query = st.text_input("Your Question", placeholder="e.g., Any QA issues this month?")
 
 if query:
     st.session_state.query_count += 1
@@ -97,7 +100,6 @@ if query:
         answer = response.choices[0].message.content
         usage = response.usage
         st.session_state.token_count += usage.total_tokens
-        st.session_state.chat_history.append((query, answer))
 
         st.subheader("🔍 Retrieved Incident Records")
         for doc in matched_docs:
@@ -109,10 +111,3 @@ if query:
 
     except Exception as e:
         st.error(f"⚠️ OpenAI API Error: {e}")
-
-# --- Show chat history ---
-with st.expander("💬 Chat History", expanded=False):
-    for i, (q, a) in enumerate(st.session_state.chat_history):
-        st.markdown(f"**Q{i+1}:** {q}")
-        st.markdown(f"*A{i+1}:* {a}")
-        st.markdown("---")

@@ -41,9 +41,9 @@ def extract_metadata(entry):
         team = rest.split(":")[0].strip()
         root_match = re.search(r"Root Cause: (.*?)\s*\|", entry)
         root_cause = root_match.group(1).strip() if root_match else "Unknown"
-        return {"date": date, "month": date.strftime("%B"), "team": team, "root_cause": root_cause, "entry": entry}
+        return {"date": date, "month": date.strftime("%B"), "year": date.year, "team": team, "root_cause": root_cause, "entry": entry}
     except:
-        return {"date": None, "month": "Unknown", "team": "Unknown", "root_cause": "Unknown", "entry": entry}
+        return {"date": None, "month": "Unknown", "year": "Unknown", "team": "Unknown", "root_cause": "Unknown", "entry": entry}
 
 incident_df = pd.DataFrame([extract_metadata(doc) for doc in documents if doc])
 
@@ -78,11 +78,34 @@ def respond_with_month_count(month_name):
     count = incident_df[incident_df["month"] == month_name].shape[0]
     st.write(f"There were **{count}** incidents reported in **{month_name}**.")
 
+def filter_by_date_range(start, end, label):
+    filtered = incident_df[(incident_df["date"] >= start) & (incident_df["date"] <= end)]
+    st.subheader(f"📅 Incidents during {label}")
+    if filtered.empty:
+        st.write(f"No incidents recorded during {label}.")
+    else:
+        for row in filtered["entry"]:
+            st.text(row)
+
 if query:
     st.session_state.query_count += 1
+    query_lower = query.lower()
+
     date_match = re.search(r"(\d{4}-\d{2}-\d{2})", query)
     month_match = re.search(r"(\b" + "\b|\b".join(calendar.month_name[1:]) + "\b)", query, re.IGNORECASE)
-    how_many = "how many" in query.lower()
+    how_many = "how many" in query_lower
+
+    today = datetime.today()
+    this_month_start = today.replace(day=1)
+    last_month_end = this_month_start - timedelta(days=1)
+    last_month_start = last_month_end.replace(day=1)
+    current_year = today.year
+    last_year = current_year - 1
+
+    current_quarter = (today.month - 1) // 3 + 1
+    this_q_start = datetime(today.year, 3 * current_quarter - 2, 1)
+    last_q_end = this_q_start - timedelta(days=1)
+    last_q_start = datetime(last_q_end.year, 3 * ((last_q_end.month - 1)//3) + 1, 1)
 
     if date_match:
         try:
@@ -92,6 +115,18 @@ if query:
             st.warning("Invalid date format detected.")
     elif how_many and month_match:
         respond_with_month_count(month_match.group(1).capitalize())
+    elif "this year" in query_lower:
+        filter_by_date_range(datetime(current_year, 1, 1), datetime(current_year, 12, 31), f"{current_year}")
+    elif "last year" in query_lower:
+        filter_by_date_range(datetime(last_year, 1, 1), datetime(last_year, 12, 31), f"{last_year}")
+    elif "this month" in query_lower:
+        filter_by_date_range(this_month_start, today, "this month")
+    elif "last month" in query_lower:
+        filter_by_date_range(last_month_start, last_month_end, "last month")
+    elif "this quarter" in query_lower:
+        filter_by_date_range(this_q_start, today, "this quarter")
+    elif "last quarter" in query_lower:
+        filter_by_date_range(last_q_start, last_q_end, "last quarter")
     else:
         query_embedding = model.encode([query])
         top_k = 5
